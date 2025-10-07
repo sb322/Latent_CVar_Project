@@ -1,9 +1,10 @@
 # utils_hazard.py
 import os, csv, random, numpy as np
+from typing import Optional
 import torch
 import matplotlib.pyplot as plt
 
-def make_pos_idx_by_bins(excess: torch.Tensor, n_bins: int = 5, rng: random.Random | None = None):
+def make_pos_idx_by_bins(excess: torch.Tensor, n_bins: int = 5, rng: Optional[random.Random] = None):
     """
     InfoNCE positives: pick a random other sample from the SAME (C-eta)+ bin.
     """
@@ -12,7 +13,7 @@ def make_pos_idx_by_bins(excess: torch.Tensor, n_bins: int = 5, rng: random.Rand
     rng = rng or random.Random(123)
 
     qs = torch.linspace(0, 1, steps=n_bins + 1, device=device)
-    edges = torch.quantile(excess, q=qs).tolist()
+    edges = torch.quantile(excess.to("cpu"), q=qs.to("cpu")).tolist()
     x = excess.detach().cpu().numpy()
     bin_ids = np.digitize(x, edges[1:-1], right=True)  # 0..n_bins-1
 

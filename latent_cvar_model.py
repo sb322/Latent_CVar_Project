@@ -14,9 +14,9 @@ class LatentCVaRAgent(nn.Module):
     def __init__(self, cfg: LatentCfg, use_excess_head=True, use_quantile_head=True, use_contrastive=True):
         super().__init__()
         self.cfg = cfg
-        self.encoder = GRUEncoder(cfg)
-        self.policy = CategoricalPolicy(cfg)
-        self.critic = CriticTailExcess(cfg)
+        self.encoder = GRUEncoder(cfg)                  # we may place this on CPU
+        self.policy = CategoricalPolicy(cfg)            # placed on main device
+        self.critic = CriticTailExcess(cfg)             # placed on main device
         self.excess_head = ExcessPredictor(cfg.z_dim, cfg.hidden) if use_excess_head else None
         self.quantile_head = QuantileHead(cfg.z_dim, cfg.hidden) if use_quantile_head else None
         self.use_contrastive = use_contrastive
@@ -41,8 +41,12 @@ class LatentCVaRAgent(nn.Module):
         s_seq, a_seq, c_seq = batch["s_seq"], batch["a_seq"], batch["c_seq"]
         s_t, G, C, eta = batch["s_t"], batch["G"], batch["C"], batch["eta"]
 
+        # Build encoder input on encoder's device (CPU if moved there), then bring back to main device
         x_seq = torch.cat([s_seq, a_seq, c_seq], dim=-1)
-        z_seq, _ = self.encode_sequence(x_seq)
+        enc_device = next(self.encoder.parameters()).device
+        x_seq_enc = x_seq.to(enc_device, non_blocking=True)
+        z_seq, _ = self.encode_sequence(x_seq_enc)
+        z_seq = z_seq.to(s_t.device, non_blocking=True)
         z_t = z_seq[:, -1, :]
 
         # Latent-conditioned critic
