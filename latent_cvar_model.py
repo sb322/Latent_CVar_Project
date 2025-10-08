@@ -14,9 +14,9 @@ class LatentCVaRAgent(nn.Module):
     def __init__(self, cfg: LatentCfg, use_excess_head=True, use_quantile_head=True, use_contrastive=True):
         super().__init__()
         self.cfg = cfg
-        self.encoder = GRUEncoder(cfg)                  # we may place this on CPU
-        self.policy = CategoricalPolicy(cfg)            # placed on main device
-        self.critic = CriticTailExcess(cfg)             # placed on main device
+        self.encoder = GRUEncoder(cfg)                  # may be on CPU
+        self.policy = CategoricalPolicy(cfg)            # on main device
+        self.critic = CriticTailExcess(cfg)             # on main device
         self.excess_head = ExcessPredictor(cfg.z_dim, cfg.hidden) if use_excess_head else None
         self.quantile_head = QuantileHead(cfg.z_dim, cfg.hidden) if use_quantile_head else None
         self.use_contrastive = use_contrastive
@@ -41,7 +41,7 @@ class LatentCVaRAgent(nn.Module):
         s_seq, a_seq, c_seq = batch["s_seq"], batch["a_seq"], batch["c_seq"]
         s_t, G, C, eta = batch["s_t"], batch["G"], batch["C"], batch["eta"]
 
-        # Build encoder input on encoder's device (CPU if moved there), then bring back to main device
+        # Build encoder input on encoder's device (CPU if moved there), then bring Z back to main device
         x_seq = torch.cat([s_seq, a_seq, c_seq], dim=-1)
         enc_device = next(self.encoder.parameters()).device
         x_seq_enc = x_seq.to(enc_device, non_blocking=True)
@@ -49,31 +49,27 @@ class LatentCVaRAgent(nn.Module):
         z_seq = z_seq.to(s_t.device, non_blocking=True)
         z_t = z_seq[:, -1, :]
 
-        # Latent-conditioned critic
+        # Critic baseline
         bphi = self.critic(s_t, z_t)
         y_excess = torch.clamp(C - eta, min=0.0)
 
         loss_critic = critic_excess_loss(bphi, y_excess)
 
-        # Aux: (C - eta)+ from Z
         loss_excess = torch.tensor(0.0, device=z_t.device)
         if self.excess_head is not None:
             gpsi = self.excess_head(z_t)
             loss_excess = excess_predictor_loss(gpsi, y_excess)
 
-        # Quantile head for eta
         loss_quantile = torch.tensor(0.0, device=z_t.device)
         pred_eta = None
         if self.quantile_head is not None:
             pred_eta = self.quantile_head(z_t)
             loss_quantile = pinball_loss(pred_eta, C, alpha)
 
-        # Contrastive hazard clustering (InfoNCE)
         loss_contrast = torch.tensor(0.0, device=z_t.device)
         if self.use_contrastive and "pos_idx" in batch:
             loss_contrast = info_nce(z_t, batch["pos_idx"], temperature=0.1)
 
-        # Policy loss: advantage-like = G - b_phi
         adv_like = G - bphi
         eta_for_actor = pred_eta if pred_eta is not None else eta
         loss_actor = policy_cvar_pg_loss(batch.get("logp_a", torch.zeros_like(G)),
